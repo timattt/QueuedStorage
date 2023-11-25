@@ -1,0 +1,135 @@
+services:
+  sender:
+    build:
+      dockerfile: ./Dockerfile
+      context: ./Sender
+    depends_on:
+      kafka:
+        condition: service_healthy
+      service-db:
+        condition: service_healthy
+      kafka-topics-generator:
+        condition: service_completed_successfully
+    environment:
+      SENDER_PORT: ${SENDER_PORT}
+      KAFKA_BROKER_PORT: ${KAFKA_BROKER_PORT}
+      DB_PORT: ${DB_PORT}
+      DB_IP: ${DB_IP}
+      KAFKA_BROKER_IP: ${KAFKA_BROKER_IP}
+      TOPIC_NAME: ${TOPIC_NAME}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - ${SENDER_PORT}:${SENDER_PORT}
+  storage:
+    build:
+      dockerfile: ./Dockerfile
+      context: ./Storage
+    depends_on:
+      kafka:
+        condition: service_healthy
+      service-db:
+        condition: service_healthy
+      kafka-topics-generator:
+        condition: service_completed_successfully
+    environment:
+      STORAGE_PORT: ${STORAGE_PORT}
+      KAFKA_BROKER_PORT: ${KAFKA_BROKER_PORT}
+      DB_PORT: ${DB_PORT}
+      DB_IP: ${DB_IP}
+      KAFKA_BROKER_IP: ${KAFKA_BROKER_IP}
+      TOPIC_NAME: ${TOPIC_NAME}
+      STORAGE_LOCATION: ${STORAGE_LOCATION}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+  zookeeper:
+    image: confluentinc/cp-zookeeper:6.2.4
+    healthcheck:
+      test: [ "CMD", "nc", "-vz", "localhost", "2181" ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - ${ZOOKEEPER_PORT}:2181
+
+  kafka:
+    image: confluentinc/cp-kafka:6.2.4
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - ${KAFKA_BROKER_PORT}:${KAFKA_BROKER_PORT}
+    healthcheck:
+      test: [ "CMD", "nc", "-vz", "localhost", "${KAFKA_BROKER_INT_PORT}" ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${ZOOKEEPER_PORT}
+      KAFKA_LISTENERS: OUTSIDE://:${KAFKA_BROKER_PORT},INTERNAL://:${KAFKA_BROKER_INT_PORT}
+      KAFKA_ADVERTISED_LISTENERS: OUTSIDE://${KAFKA_BROKER_IP}:${KAFKA_BROKER_PORT},INTERNAL://${KAFKA_BROKER_IP}:${KAFKA_BROKER_INT_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,OUTSIDE:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui
+    container_name: kafka-ui
+    ports:
+      - "${KAFKA_UI_PORT}:${KAFKA_UI_PORT}"
+    restart: always
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:${KAFKA_BROKER_INT_PORT}
+
+  service-db:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "-d", "clients_database"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    ports:
+      - "${DB_PORT}:${DB_PORT}"
+    user: postgres
+    volumes:
+      - ./infrastructure/db/:/docker-entrypoint-initdb.d/
+    restart: unless-stopped
+
+  pgadmin:
+    container_name: pgadmin4_container
+    image: dpage/pgadmin4:7
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PG_ADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PG_ADMIN_PASSWORD}
+    ports:
+      - "${PG_ADMIN_PORT}:80"
+
+  kafka-topics-generator:
+    image: confluentinc/cp-kafka:6.2.4
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: [ '/bin/sh', '-c' ]
+    command: |
+      "
+      # blocks until kafka is reachable
+      kafka-topics --bootstrap-server ${KAFKA_BROKER_IP}:${KAFKA_BROKER_INT_PORT} --list
+      
+      echo -e 'Creating kafka topics'
+      kafka-topics --bootstrap-server ${KAFKA_BROKER_IP}:${KAFKA_BROKER_INT_PORT} --create --if-not-exists --topic ${TOPIC_NAME} --replication-factor 1 --partitions 2
+      
+      echo -e 'Successfully created the following topics:'
+      kafka-topics --bootstrap-server ${KAFKA_BROKER_IP}:${KAFKA_BROKER_INT_PORT} --list
+      "
