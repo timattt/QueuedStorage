@@ -17,6 +17,8 @@
 
 ### Архитектура
 
+<img width="513" alt="image" src="https://github.com/timattt/QueuedStorage/assets/25401699/b8601da0-ca21-4cb6-940a-79951e184f9f">
+
 ### Принцип работы
 
 Клиент приходит через HTTP сервису Sender. Указывает операцию, которую надо совершить с хранилищем.
